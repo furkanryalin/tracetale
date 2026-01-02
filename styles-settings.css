@@ -1,0 +1,409 @@
+/* ===================================
+   SETTINGS MODAL - Ayarlar Modal Stilleri
+   =================================== */
+
+.settings-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(5px);
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.settings-modal.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.settings-modal-content {
+    background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+    border-radius: 20px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: slideInSettings 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes slideInSettings {
+    from {
+        opacity: 0;
+        transform: translateY(-50px) scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Header */
+.settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 25px 30px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: linear-gradient(135deg, #2d2d2d 0%, #1e1e1e 100%);
+    border-radius: 20px 20px 0 0;
+}
+
+.settings-header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.settings-close {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: white;
+    font-size: 28px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+
+.settings-close:hover {
+    background: rgba(255, 59, 48, 0.2);
+    transform: rotate(90deg);
+}
+
+/* Body */
+.settings-body {
+    overflow-y: auto;
+    padding: 20px 30px;
+    flex: 1;
+}
+
+.settings-body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.settings-body::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+}
+
+.settings-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+}
+
+.settings-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Section */
+.settings-section {
+    margin-bottom: 30px;
+}
+
+.settings-section h3 {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Setting Item */
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    transition: all 0.3s ease;
+}
+
+.setting-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateX(5px);
+}
+
+.setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+}
+
+.setting-label {
+    color: white;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.setting-description {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+}
+
+.setting-value {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+}
+
+.info-item {
+    justify-content: space-between;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 28px;
+    flex-shrink: 0;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.2);
+    transition: 0.4s;
+    border-radius: 34px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(22px);
+}
+
+.toggle-switch:hover .toggle-slider {
+    box-shadow: 0 0 8px rgba(102, 126, 234, 0.5);
+}
+
+/* Action Buttons */
+.settings-action-btn {
+    width: 100%;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: all 0.3s ease;
+}
+
+.settings-action-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+.settings-action-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.settings-action-btn.danger {
+    background: rgba(255, 59, 48, 0.2);
+    color: #ff3b30;
+}
+
+.settings-action-btn.danger:hover {
+    background: rgba(255, 59, 48, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3);
+}
+
+/* Footer */
+.settings-footer {
+    display: flex;
+    gap: 10px;
+    padding: 20px 30px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+    border-radius: 0 0 20px 20px;
+}
+
+.settings-btn {
+    flex: 1;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.settings-btn.primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.settings-btn.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.settings-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+.settings-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Logout Section */
+.logout-section {
+    border-top: 2px solid rgba(255, 255, 255, 0.1);
+    padding-top: 20px;
+    margin-top: 20px;
+}
+
+.logout-btn {
+    width: 100%;
+    padding: 16px;
+    background: linear-gradient(135deg, #ff4444, #cc0000);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(255, 68, 68, 0.3);
+}
+
+.logout-btn:hover {
+    background: linear-gradient(135deg, #cc0000, #990000);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(255, 68, 68, 0.4);
+}
+
+.logout-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 10px rgba(255, 68, 68, 0.3);
+}
+
+.logout-icon {
+    font-size: 20px;
+}
+
+.logout-text {
+    font-size: 16px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .settings-modal-content {
+        width: 95%;
+        max-height: 90vh;
+    }
+
+    .settings-header,
+    .settings-body,
+    .settings-footer {
+        padding: 20px;
+    }
+
+    .settings-header h2 {
+        font-size: 20px;
+    }
+
+    .setting-item {
+        padding: 12px;
+    }
+
+    .setting-label {
+        font-size: 14px;
+    }
+
+    .setting-description {
+        font-size: 12px;
+    }
+}
+
+/* Dark Mode Override (zaten karanlık tema kullanıyoruz) */
+body.light-mode .settings-modal-content {
+    background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+}
+
+body.light-mode .settings-header,
+body.light-mode .settings-footer {
+    background: linear-gradient(135deg, #ffffff 0%, #f5f5f5 100%);
+}
+
+body.light-mode .settings-section h3 {
+    color: #333;
+}
+
+body.light-mode .setting-label {
+    color: #333;
+}
+
+body.light-mode .setting-description {
+    color: #666;
+}
+
+body.light-mode .setting-item {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .setting-item:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+

@@ -1,0 +1,2870 @@
+let map;
+let markers = [];
+let currentLocation = null;
+let selectedStory = null;
+let contextMenuVisible = false;
+let currentMapStyle = 'dark';
+let currentTileLayer = null;
+let labelLayer = null;
+let radiusFilter = {
+    enabled: false,
+    center: null,
+    radius: 1000,
+    circle: null
+};
+
+let waypointMarker = null;
+let waypointDraggable = false;
+
+document.addEventListener('DOMContentLoaded', function() {
+    const introScreen = document.getElementById('intro-screen');
+    const mainSite = document.getElementById('main-site');
+    
+    setTimeout(() => {
+        console.log('Giriş animasyonu başlatılıyor...');
+        
+        introScreen.classList.add('fade-out');
+        
+        setTimeout(() => {
+            console.log('Ana site gösteriliyor...');
+            introScreen.style.display = 'none';
+            mainSite.classList.remove('hidden');
+            
+            const modals = document.querySelectorAll('.modal, .photo-modal, .filter-modal, .profile-modal');
+            modals.forEach(modal => {
+                modal.classList.add('hidden');
+            });
+            
+            console.log('Harita başlatılıyor...');
+            initMap();
+            console.log('Site hazır!');
+        }, 1500); // CSS transition süresi
+        
+    }, 3000); // 3 saniye giriş ekranı göster
+});
+
+function initMap() {
+    console.log('Harita başlatılıyor...');
+    
+    if (typeof L === 'undefined') {
+        console.error('Leaflet.js yüklenmemiş!');
+        return;
+    }
+    
+    const mapContainer = document.getElementById('map');
+    if (!mapContainer) {
+        console.error('Map container bulunamadı!');
+        return;
+    }
+    
+    console.log('Map container bulundu:', mapContainer);
+    
+    const defaultLocation = [41.0082, 28.9784];
+    
+    try {
+        map = L.map('map', {
+            maxZoom: 18,
+            minZoom: 1
+        }).setView(defaultLocation, 13);
+        console.log('Harita oluşturuldu:', map);
+    } catch (error) {
+        console.error('Harita oluşturulamadı:', error);
+        return;
+    }
+    
+    setMapStyle('dark');
+    
+    setTimeout(() => {
+        map.invalidateSize();
+        console.log('Harita boyutu ayarlandı');
+    }, 100);
+    
+    window.addEventListener('resize', () => {
+        if (map) {
+            map.invalidateSize();
+        }
+    });
+    
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                currentLocation = [position.coords.latitude, position.coords.longitude];
+                map.setView(currentLocation, 15);
+                console.log('Sayfa yüklendiğinde konum alındı:', currentLocation);
+            },
+            function(error) {
+                console.log('Sayfa yüklendiğinde konum alınamadı, varsayılan konum kullanılıyor');
+                console.error('Konum hatası:', error);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 15000,        // 15 saniye timeout
+                maximumAge: 300000     // 5 dakika cache
+            }
+        );
+    }
+    
+    map.on('click', function(event) {
+        hideContextMenu();
+        
+        if (waypointMarker && event.originalEvent.target === waypointMarker.getElement()) {
+            createStoryAtWaypoint(event.latlng);
+            return;
+        }
+        
+        if (waypointMarker) {
+            waypointMarker.setLatLng(event.latlng);
+            currentLocation = event.latlng;
+        } else {
+            createWaypoint(event.latlng);
+        }
+    });
+    
+    map.on('dblclick', function(event) {
+        if (event.originalEvent.ctrlKey || event.originalEvent.metaKey) {
+            setRadiusCenter([event.latlng.lat, event.latlng.lng]);
+            showNotification('Yarıçap merkezi ayarlandı! 📍');
+        }
+    });
+    
+    map.on('contextmenu', function(event) {
+        event.originalEvent.preventDefault();
+    });
+    
+    map.on('zoomend', function() {
+        const currentZoom = map.getZoom();
+        if (currentMapStyle === 'satellite' && currentZoom > 18) {
+            map.setZoom(18);
+        }
+    });
+    
+    setupEventListeners();
+    
+    console.log('Sistemler başlatılıyor...');
+    setupFilterSystem();
+    setupAuthSystem();
+    setupProfileSystem();
+    setupDMSystem();
+    setupSearchSystem();
+    console.log('Site hazır!');
+}
+
+function setupEventListeners() {
+    const addStoryBtn = document.getElementById('add-story-btn');
+    const addStoryFab = document.getElementById('add-story-fab');
+    const closeModal = document.getElementById('close-modal');
+    const storyModal = document.getElementById('story-modal');
+    
+    addStoryBtn.addEventListener('click', () => openModal());
+    addStoryFab.addEventListener('click', () => openModal());
+    closeModal.addEventListener('click', () => closeModalFunc());
+    
+    storyModal.addEventListener('click', function(e) {
+        if (e.target === storyModal) {
+            closeModalFunc();
+        }
+    });
+    
+    const storyForm = document.getElementById('story-form');
+    storyForm.addEventListener('submit', handleStorySubmit);
+    
+    setupPhotoUpload();
+    
+    const storyTypeSelect = document.getElementById('story-type');
+    if (storyTypeSelect) {
+        storyTypeSelect.addEventListener('change', function() {
+            const photoUploadGroup = document.getElementById('photo-upload-group');
+            if (photoUploadGroup) {
+                if (this.value === 'photo') {
+                    photoUploadGroup.style.display = 'block';
+                } else {
+                    photoUploadGroup.style.display = 'none';
+                    clearPhotoPreview();
+                }
+            }
+        });
+    }
+    
+    setupPhotoModal();
+    
+    const contextMenu = document.getElementById('context-menu');
+    const addStoryContext = document.getElementById('add-story-context');
+    const addNoteContext = document.getElementById('add-note-context');
+    const addPhotoContext = document.getElementById('add-photo-context');
+    
+    addStoryContext.addEventListener('click', () => {
+        hideContextMenu();
+        openModalWithType('story');
+    });
+    addNoteContext.addEventListener('click', () => {
+        hideContextMenu();
+        openModalWithType('note');
+    });
+    addPhotoContext.addEventListener('click', () => {
+        hideContextMenu();
+        openModalWithType('photo');
+    });
+    
+    const storyActionsModal = document.getElementById('story-actions-modal');
+    const closeActionsModal = document.getElementById('close-actions-modal');
+    const deleteStoryBtn = document.getElementById('delete-story');
+    const editStoryBtn = document.getElementById('edit-story');
+    const shareStoryBtn = document.getElementById('share-story');
+    
+    closeActionsModal.addEventListener('click', () => closeActionsModalFunc());
+    deleteStoryBtn.addEventListener('click', () => handleDeleteStory());
+    editStoryBtn.addEventListener('click', () => handleEditStory());
+    shareStoryBtn.addEventListener('click', () => handleShareStory());
+    
+    storyActionsModal.addEventListener('click', function(e) {
+        if (e.target === storyActionsModal) {
+            closeActionsModalFunc();
+        }
+    });
+    
+    setupMapStylePanel();
+    
+    document.addEventListener('click', function(e) {
+        if (!contextMenu.contains(e.target)) {
+            hideContextMenu();
+        }
+    });
+}
+
+function openModal() {
+    const storyModal = document.getElementById('story-modal');
+    storyModal.classList.remove('hidden');
+}
+
+function closeModalFunc() {
+    const storyModal = document.getElementById('story-modal');
+    storyModal.classList.add('hidden');
+    document.getElementById('story-form').reset();
+    clearPhotoPreview();
+    document.getElementById('photo-upload-group').style.display = 'none';
+}
+
+function addStoryAtLocation(latLng) {
+    currentLocation = latLng;
+    openModal();
+}
+
+function showContextMenu(event, latLng) {
+    const contextMenu = document.getElementById('context-menu');
+    if (!contextMenu) return;
+    
+    currentLocation = latLng;
+    
+    updateLocationDisplay(latLng);
+    
+    contextMenu.style.left = event.clientX + 'px';
+    contextMenu.style.top = event.clientY + 'px';
+    contextMenu.classList.remove('hidden');
+    contextMenuVisible = true;
+}
+
+function hideContextMenu() {
+    const contextMenu = document.getElementById('context-menu');
+    if (!contextMenu) return;
+    
+    contextMenu.classList.add('hidden');
+    contextMenuVisible = false;
+}
+
+function openModalWithType(type) {
+    const storyModal = document.getElementById('story-modal');
+    const storyTypeSelect = document.getElementById('story-type');
+    const photoUploadGroup = document.getElementById('photo-upload-group');
+    
+    if (!isLoggedIn()) {
+        showNotification('Paylaşım yapmak için giriş yapın! 🔐');
+        openAuthModal();
+        return;
+    }
+    
+    storyTypeSelect.value = type;
+    
+    if (type === 'photo') {
+        photoUploadGroup.style.display = 'block';
+    } else {
+        photoUploadGroup.style.display = 'none';
+        clearPhotoPreview();
+    }
+    
+    storyModal.classList.remove('hidden');
+    
+    if (currentLocation) {
+        updateLocationDisplay(currentLocation);
+    }
+}
+
+function updateLocationDisplay(latLng) {
+    const locationSpan = document.getElementById('selected-location');
+    if (locationSpan && latLng) {
+        locationSpan.textContent = `${latLng.lat.toFixed(4)}, ${latLng.lng.toFixed(4)}`;
+    }
+}
+
+function handleStorySubmit(e) {
+    e.preventDefault();
+    
+    const title = document.getElementById('story-title').value;
+    const content = document.getElementById('story-content').value;
+    const type = document.getElementById('story-type').value;
+    const anonymous = document.getElementById('anonymous').checked;
+    
+    if (!title || !content) {
+        alert('Lütfen başlık ve içerik alanlarını doldurun');
+        return;
+    }
+    
+    if (!currentLocation) {
+        alert('Lütfen haritada bir konum seçin');
+        return;
+    }
+    
+    let photoData = null;
+    if (type === 'photo' && window.currentPhotoData) {
+        photoData = {
+            file: window.currentPhotoData.file,
+            name: window.currentPhotoData.file.name,
+            size: window.currentPhotoData.file.size,
+            type: window.currentPhotoData.file.type,
+            dataUrl: window.currentPhotoData.dataUrl
+        };
+    }
+    
+    const user = getCurrentUser();
+    const author = anonymous ? 'Anonim' : (user ? user.name : 'Kullanıcı');
+    
+    const storyData = {
+        title: title,
+        content: content,
+        type: type,
+        anonymous: anonymous,
+        author: author,
+        userId: user ? user.id : null,
+        photo: photoData,
+        location: {
+            lat: currentLocation.lat,
+            lng: currentLocation.lng
+        },
+        timestamp: new Date().toISOString()
+    };
+    
+    addMarkerToMap(storyData);
+    
+    if (user) {
+        updateUserStats(user.id, type);
+    }
+    
+    closeModalFunc();
+    
+    removeWaypoint();
+    
+    console.log('Hikaye eklendi:', storyData);
+}
+
+function addMarkerToMap(storyData) {
+    const marker = L.marker([storyData.location.lat, storyData.location.lng], {
+        title: storyData.title,
+        icon: getMarkerIcon(storyData.type)
+    }).addTo(map);
+    
+    const popup = L.popup({
+        maxWidth: 300,
+        className: 'custom-popup'
+    }).setContent(createInfoWindowContent(storyData));
+    
+    marker.on('popupopen', function() {
+        setTimeout(() => {
+            const photoImg = document.querySelector('.story-photo');
+            if (photoImg) {
+                photoImg.addEventListener('click', function() {
+                    const photoData = JSON.parse(this.dataset.photo);
+                    const storyData = JSON.parse(this.dataset.story);
+                    openPhotoModal(photoData, storyData);
+                });
+            }
+            
+            setupStoryInteractions();
+        }, 100);
+    });
+    
+    marker.bindPopup(popup);
+    
+    marker.on('contextmenu', function(e) {
+        e.originalEvent.preventDefault();
+        selectedStory = storyData;
+        showStoryActionsModal(storyData);
+    });
+    
+    marker.storyData = storyData;
+    
+    markers.push(marker);
+}
+
+function getMarkerIcon(type) {
+    const icons = {
+        story: L.divIcon({
+            className: 'custom-marker',
+            html: '<div class="marker-icon story-marker">📖</div>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 30]
+        }),
+        note: L.divIcon({
+            className: 'custom-marker',
+            html: '<div class="marker-icon note-marker">📝</div>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 30]
+        }),
+        photo: L.divIcon({
+            className: 'custom-marker',
+            html: '<div class="marker-icon photo-marker">📷</div>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 30]
+        })
+    };
+    
+    return icons[type] || icons.story;
+}
+
+function createInfoWindowContent(storyData) {
+    const author = storyData.author || (storyData.anonymous ? 'Anonim' : 'Kullanıcı');
+    const date = new Date(storyData.timestamp).toLocaleDateString('tr-TR');
+    
+    const interactions = loadInteractionData(storyData.timestamp);
+    const likes = interactions.likes || 0;
+    const comments = interactions.comments || 0;
+    const isSaved = interactions.saved || false;
+    
+    let photoContent = '';
+    if (storyData.type === 'photo' && storyData.photo) {
+        photoContent = `
+            <div class="story-popup-photo">
+                <img src="${storyData.photo.dataUrl || '#'}" alt="Fotoğraf" class="story-photo" style="width: 100%; max-width: 200px; border-radius: 4px; margin: 8px 0; cursor: pointer;" data-photo='${JSON.stringify(storyData.photo)}' data-story='${JSON.stringify(storyData)}'>
+            </div>
+        `;
+    }
+    
+    return `
+        <div class="story-popup-content">
+            <h3 class="story-popup-title">${storyData.title}</h3>
+            <p class="story-popup-text">${storyData.content}</p>
+            ${photoContent}
+            <div class="story-popup-meta">
+                <span class="story-popup-author">${author} • ${date}</span>
+            </div>
+            <div class="story-interactions">
+                <button class="interaction-btn like-btn ${likes > 0 ? 'liked' : ''}" data-story-id="${storyData.timestamp}">
+                    <span class="interaction-icon">❤️</span>
+                    <span class="interaction-count">${likes}</span>
+                </button>
+                <button class="interaction-btn comment-btn" data-story-id="${storyData.timestamp}">
+                    <span class="interaction-icon">💬</span>
+                    <span class="interaction-count">${comments}</span>
+                </button>
+                <button class="interaction-btn share-btn" data-story-id="${storyData.timestamp}">
+                    <span class="interaction-icon">📤</span>
+                </button>
+                <button class="interaction-btn save-btn ${isSaved ? 'saved' : ''}" data-story-id="${storyData.timestamp}">
+                    <span class="interaction-icon">🔖</span>
+                </button>
+            </div>
+            <div class="story-popup-hint">
+                <em>Sağ tıklayarak işlemler menüsünü açabilirsiniz</em>
+            </div>
+        </div>
+    `;
+}
+
+function showStoryActionsModal(storyData) {
+    const modal = document.getElementById('story-actions-modal');
+    const titleEl = document.getElementById('story-preview-title');
+    const contentEl = document.getElementById('story-preview-content');
+    const authorEl = document.getElementById('story-preview-author');
+    const dateEl = document.getElementById('story-preview-date');
+    
+    titleEl.textContent = storyData.title;
+    contentEl.textContent = storyData.content;
+    authorEl.textContent = storyData.anonymous ? 'Anonim' : 'Kullanıcı';
+    dateEl.textContent = new Date(storyData.timestamp).toLocaleDateString('tr-TR');
+    
+    modal.classList.remove('hidden');
+}
+
+function closeActionsModalFunc() {
+    const modal = document.getElementById('story-actions-modal');
+    modal.classList.add('hidden');
+    selectedStory = null;
+}
+
+function handleDeleteStory() {
+    if (!selectedStory) return;
+    
+    if (confirm('Bu hikayeyi silmek istediğinizden emin misiniz?')) {
+        const markerToRemove = markers.find(marker => 
+            marker.storyData && marker.storyData.timestamp === selectedStory.timestamp
+        );
+        
+        if (markerToRemove) {
+            map.removeLayer(markerToRemove);
+            markers = markers.filter(marker => marker !== markerToRemove);
+        }
+        
+        closeActionsModalFunc();
+        console.log('Hikaye silindi:', selectedStory);
+    }
+}
+
+function handleEditStory() {
+    if (!selectedStory) return;
+    
+    handleDeleteStory();
+    
+    currentLocation = { lat: selectedStory.location.lat, lng: selectedStory.location.lng };
+    openModalWithType(selectedStory.type);
+    
+    document.getElementById('story-title').value = selectedStory.title;
+    document.getElementById('story-content').value = selectedStory.content;
+    document.getElementById('anonymous').checked = selectedStory.anonymous;
+    
+    closeActionsModalFunc();
+}
+
+function handleShareStory() {
+    if (!selectedStory) return;
+    
+    const shareUrl = `${window.location.origin}${window.location.pathname}?story=${selectedStory.timestamp}`;
+    
+    if (navigator.share) {
+        navigator.share({
+            title: selectedStory.title,
+            text: selectedStory.content,
+            url: shareUrl
+        });
+    } else {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+            alert('Hikaye linki panoya kopyalandı!');
+        });
+    }
+    
+    closeActionsModalFunc();
+}
+
+
+function setupMapStylePanel() {
+    const styleOptions = document.querySelectorAll('.style-option');
+    styleOptions.forEach(option => {
+        option.addEventListener('click', function() {
+            styleOptions.forEach(opt => opt.classList.remove('active'));
+            this.classList.add('active');
+            
+            const selectedStyle = this.dataset.style;
+            setMapStyle(selectedStyle);
+        });
+    });
+    
+    const trafficToggle = document.getElementById('traffic-toggle');
+    const transitToggle = document.getElementById('transit-toggle');
+    const bikeToggle = document.getElementById('bike-toggle');
+    const labelsToggle = document.getElementById('labels-toggle');
+    
+    trafficToggle.addEventListener('click', function() {
+        this.classList.toggle('active');
+        console.log('Trafik:', this.classList.contains('active'));
+    });
+    
+    transitToggle.addEventListener('click', function() {
+        this.classList.toggle('active');
+        console.log('Toplu Taşıma:', this.classList.contains('active'));
+    });
+    
+    bikeToggle.addEventListener('click', function() {
+        this.classList.toggle('active');
+        console.log('Bisiklet:', this.classList.contains('active'));
+    });
+    
+    labelsToggle.addEventListener('click', function() {
+        this.classList.toggle('active');
+        toggleLabels(this.classList.contains('active'));
+        console.log('Etiketler:', this.classList.contains('active'));
+    });
+    
+    const myLocationBtn = document.getElementById('my-location-btn');
+    myLocationBtn.addEventListener('click', function() {
+        goToMyLocation();
+    });
+}
+
+
+function setMapStyle(style) {
+    if (currentTileLayer) {
+        map.removeLayer(currentTileLayer);
+    }
+    
+    if (labelLayer) {
+        map.removeLayer(labelLayer);
+        labelLayer = null;
+    }
+    
+    let tileLayer;
+    
+    switch(style) {
+        case 'dark':
+            tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            });
+            break;
+        case 'light':
+            tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            });
+            break;
+        case 'satellite':
+            tileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
+                maxZoom: 18,
+                minZoom: 1,
+                errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+                tileerror: function() {
+                    console.log('Uydu görüntüsü yüklenemedi, zoom seviyesi çok yüksek olabilir');
+                }
+            });
+            
+            labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
+                maxZoom: 18,
+                minZoom: 1,
+                opacity: 0.8,
+                errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+                tileerror: function() {
+                    console.log('Etiket katmanı yüklenemedi');
+                }
+            });
+            break;
+        case 'terrain':
+            tileLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://opentopomap.org/">OpenTopoMap</a>',
+                maxZoom: 17
+            });
+            break;
+        default:
+            tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            });
+    }
+    
+    tileLayer.addTo(map);
+    currentTileLayer = tileLayer;
+    currentMapStyle = style;
+    
+    if (style === 'satellite' && labelLayer) {
+        labelLayer.addTo(map);
+    }
+    
+    if (style === 'satellite') {
+        map.setMaxZoom(18);
+    } else {
+        map.setMaxZoom(19);
+    }
+    
+}
+
+function toggleLabels(show) {
+    if (currentMapStyle === 'satellite') {
+        if (show && labelLayer) {
+            labelLayer.addTo(map);
+        } else if (!show && labelLayer) {
+            map.removeLayer(labelLayer);
+        }
+    }
+}
+
+function goToMyLocation() {
+    const locationBtn = document.getElementById('my-location-btn');
+    
+    locationBtn.classList.add('loading');
+    
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                const userLocation = [position.coords.latitude, position.coords.longitude];
+                
+                map.setView(userLocation, 15);
+                
+                addUserLocationMarker(userLocation);
+                
+                locationBtn.classList.remove('loading');
+                
+                console.log('Konum alındı:', userLocation);
+                showNotification('Konumunuz bulundu! 📍');
+            },
+            function(error) {
+                locationBtn.classList.remove('loading');
+                
+                let errorMessage = 'Konum alınamadı. ';
+                switch(error.code) {
+                    case error.PERMISSION_DENIED:
+                        errorMessage += 'Konum erişimi reddedildi. Lütfen tarayıcı ayarlarından konum iznini verin.';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        errorMessage += 'Konum bilgisi mevcut değil. GPS\'in açık olduğundan emin olun.';
+                        break;
+                    case error.TIMEOUT:
+                        errorMessage += 'Konum isteği zaman aşımına uğradı. Tekrar deneyin.';
+                        break;
+                    default:
+                        errorMessage += 'Bilinmeyen hata. Tekrar deneyin.';
+                        break;
+                }
+                
+                showNotification(errorMessage);
+                console.error('Konum hatası:', error);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 20000,        // 20 saniye timeout
+                maximumAge: 300000     // 5 dakika cache
+            }
+        );
+    } else {
+        locationBtn.classList.remove('loading');
+        alert('Bu tarayıcı konum özelliğini desteklemiyor.');
+    }
+}
+
+function addUserLocationMarker(location) {
+    if (window.userLocationMarker) {
+        map.removeLayer(window.userLocationMarker);
+    }
+    
+    const userIcon = L.divIcon({
+        className: 'user-location-marker',
+        html: '<div class="user-marker-icon">📍</div>',
+        iconSize: [30, 30],
+        iconAnchor: [15, 30]
+    });
+    
+    window.userLocationMarker = L.marker(location, {
+        icon: userIcon,
+        title: 'Sizin konumunuz'
+    }).addTo(map);
+    
+    window.userLocationMarker.bindPopup('Sizin konumunuz').openPopup();
+}
+
+function setupPhotoUpload() {
+    const photoUploadArea = document.getElementById('photo-upload-area');
+    const photoUpload = document.getElementById('photo-upload');
+    const photoRemoveBtn = document.getElementById('photo-remove-btn');
+    
+    photoUploadArea.addEventListener('click', function() {
+        photoUpload.click();
+    });
+    
+    photoUpload.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            if (file.size > 5 * 1024 * 1024) {
+                alert('Dosya boyutu 5MB\'dan büyük olamaz.');
+                return;
+            }
+            
+            if (!file.type.startsWith('image/')) {
+                alert('Lütfen sadece resim dosyası seçin.');
+                return;
+            }
+            
+            showPhotoPreview(file);
+        }
+    });
+    
+    photoRemoveBtn.addEventListener('click', function() {
+        clearPhotoPreview();
+    });
+}
+
+function showPhotoPreview(file) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const photoPreview = document.getElementById('photo-preview');
+        const photoPreviewImg = document.getElementById('photo-preview-img');
+        const photoUploadArea = document.getElementById('photo-upload-area');
+        
+        photoPreviewImg.src = e.target.result;
+        photoPreview.style.display = 'block';
+        photoUploadArea.style.display = 'none';
+        
+        window.currentPhotoData = {
+            file: file,
+            dataUrl: e.target.result
+        };
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearPhotoPreview() {
+    const photoPreview = document.getElementById('photo-preview');
+    const photoUploadArea = document.getElementById('photo-upload-area');
+    const photoUpload = document.getElementById('photo-upload');
+    
+    photoPreview.style.display = 'none';
+    photoUploadArea.style.display = 'block';
+    photoUpload.value = '';
+    
+    window.currentPhotoData = null;
+}
+
+
+function setupFilterSystem() {
+    const filterBtn = document.getElementById('filter-btn');
+    const filterModal = document.getElementById('filter-modal');
+    const filterClose = document.getElementById('filter-close');
+    const filterApply = document.getElementById('filter-apply');
+    const filterClear = document.getElementById('filter-clear');
+    
+    filterBtn.addEventListener('click', () => {
+        filterModal.classList.remove('hidden');
+    });
+    
+    filterClose.addEventListener('click', closeFilterModal);
+    filterModal.addEventListener('click', function(e) {
+        if (e.target === filterModal) {
+            closeFilterModal();
+        }
+    });
+    
+    filterApply.addEventListener('click', applyFilters);
+    filterClear.addEventListener('click', clearFilters);
+    
+    setupRadiusFilter();
+}
+
+function closeFilterModal() {
+    const filterModal = document.getElementById('filter-modal');
+    filterModal.classList.add('hidden');
+}
+
+function applyFilters() {
+    const filters = {
+        types: {
+            story: document.getElementById('filter-story').checked,
+            note: document.getElementById('filter-note').checked,
+            photo: document.getElementById('filter-photo').checked
+        },
+        dateFrom: document.getElementById('filter-date-from').value,
+        dateTo: document.getElementById('filter-date-to').value,
+        author: document.getElementById('filter-author').value.toLowerCase(),
+        keyword: document.getElementById('filter-keyword').value.toLowerCase()
+    };
+    
+    Object.values(storyMarkers).forEach(marker => {
+        marker.setOpacity(0);
+    });
+    
+    Object.values(storyMarkers).forEach(marker => {
+        const storyData = marker.storyData;
+        let show = true;
+        
+        if (!filters.types[storyData.type]) {
+            show = false;
+        }
+        
+        if (filters.dateFrom && new Date(storyData.timestamp) < new Date(filters.dateFrom)) {
+            show = false;
+        }
+        if (filters.dateTo && new Date(storyData.timestamp) > new Date(filters.dateTo)) {
+            show = false;
+        }
+        
+        if (filters.author && !storyData.author.toLowerCase().includes(filters.author)) {
+            show = false;
+        }
+        
+        if (filters.keyword && 
+            !storyData.title.toLowerCase().includes(filters.keyword) && 
+            !storyData.content.toLowerCase().includes(filters.keyword)) {
+            show = false;
+        }
+        
+        if (radiusFilter.enabled && radiusFilter.center) {
+            const markerLatLng = [storyData.location.lat, storyData.location.lng];
+            const distance = calculateDistance(radiusFilter.center, markerLatLng);
+            if (distance > radiusFilter.radius) {
+                show = false;
+            }
+        }
+        
+        if (show) {
+            marker.setOpacity(1);
+        }
+    });
+    
+    closeFilterModal();
+}
+
+function clearFilters() {
+    document.getElementById('filter-story').checked = true;
+    document.getElementById('filter-note').checked = true;
+    document.getElementById('filter-photo').checked = true;
+    document.getElementById('filter-date-from').value = '';
+    document.getElementById('filter-date-to').value = '';
+    document.getElementById('filter-author').value = '';
+    document.getElementById('filter-keyword').value = '';
+    
+    Object.values(storyMarkers).forEach(marker => {
+        marker.setOpacity(1);
+    });
+    
+    clearRadiusFilter();
+}
+
+function setupRadiusFilter() {
+    const radiusSlider = document.getElementById('radius-slider');
+    const radiusValue = document.getElementById('radius-value');
+    const radiusButtons = document.querySelectorAll('.radius-btn');
+    const centerRadiusBtn = document.getElementById('center-radius-btn');
+    
+    if (!radiusSlider || !radiusValue || !centerRadiusBtn) {
+        console.log('Radius filter elements not found');
+        return;
+    }
+    
+    radiusSlider.addEventListener('input', function() {
+        const value = parseInt(this.value);
+        radiusValue.textContent = value;
+        radiusFilter.radius = value;
+        
+        if (radiusFilter.enabled && radiusFilter.circle) {
+            updateRadiusCircle();
+        }
+    });
+    
+    radiusButtons.forEach(btn => {
+        btn.addEventListener('click', function() {
+            const radius = parseInt(this.dataset.radius);
+            radiusSlider.value = radius;
+            radiusValue.textContent = radius;
+            radiusFilter.radius = radius;
+            
+            radiusButtons.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            
+            if (radiusFilter.enabled && radiusFilter.circle) {
+                updateRadiusCircle();
+            }
+        });
+    });
+    
+    centerRadiusBtn.addEventListener('click', function() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const userLocation = [position.coords.latitude, position.coords.longitude];
+                    setRadiusCenter(userLocation);
+                    showNotification('Yarıçap merkezi konumunuza ayarlandı! 📍');
+                },
+                function(error) {
+                    showNotification('Konum alınamadı. Harita merkezini kullanın.');
+                    const mapCenter = map.getCenter();
+                    setRadiusCenter([mapCenter.lat, mapCenter.lng]);
+                }
+            );
+        } else {
+            const mapCenter = map.getCenter();
+            setRadiusCenter([mapCenter.lat, mapCenter.lng]);
+        }
+    });
+}
+
+function setRadiusCenter(latLng) {
+    radiusFilter.center = latLng;
+    radiusFilter.enabled = true;
+    
+    if (radiusFilter.circle) {
+        map.removeLayer(radiusFilter.circle);
+    }
+    
+    radiusFilter.circle = L.circle(latLng, {
+        radius: radiusFilter.radius,
+        className: 'radius-circle'
+    }).addTo(map);
+    
+    setupRadiusCircleInteraction();
+    
+    map.setView(latLng, 13);
+    applyRadiusFilter();
+    showRadiusStatus();
+}
+
+function updateRadiusCircle() {
+    if (radiusFilter.circle && radiusFilter.center) {
+        radiusFilter.circle.setRadius(radiusFilter.radius);
+    }
+}
+
+function applyRadiusFilter() {
+    if (!radiusFilter.enabled || !radiusFilter.center) {
+        return;
+    }
+    
+    Object.values(storyMarkers).forEach(marker => {
+        if (marker.storyData) {
+            const markerLatLng = [marker.storyData.location.lat, marker.storyData.location.lng];
+            const distance = calculateDistance(radiusFilter.center, markerLatLng);
+            
+            if (distance <= radiusFilter.radius) {
+                marker.setOpacity(1);
+            } else {
+                marker.setOpacity(0);
+            }
+        }
+    });
+}
+
+function clearRadiusFilter() {
+    if (radiusFilter.circle) {
+        map.removeLayer(radiusFilter.circle);
+        radiusFilter.circle = null;
+    }
+    radiusFilter.enabled = false;
+    radiusFilter.center = null;
+    hideRadiusStatus();
+}
+
+function showRadiusStatus() {
+    const status = document.getElementById('radius-status');
+    const closeBtn = document.getElementById('radius-status-close');
+    
+    if (status) {
+        status.style.display = 'block';
+        
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function() {
+                clearRadiusFilter();
+                Object.values(storyMarkers).forEach(marker => {
+                    marker.setOpacity(1);
+                });
+            });
+        }
+    }
+}
+
+function hideRadiusStatus() {
+    const status = document.getElementById('radius-status');
+    if (status) {
+        status.style.display = 'none';
+    }
+}
+
+function calculateDistance(latLng1, latLng2) {
+    const R = 6371000;
+    const lat1 = latLng1[0] * Math.PI / 180;
+    const lat2 = latLng2[0] * Math.PI / 180;
+    const deltaLat = (latLng2[0] - latLng1[0]) * Math.PI / 180;
+    const deltaLng = (latLng2[1] - latLng1[1]) * Math.PI / 180;
+    
+    const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    
+    return R * c;
+}
+
+function setupRadiusCircleInteraction() {
+    if (!radiusFilter.circle || !radiusFilter.center) return;
+    
+    const circle = radiusFilter.circle;
+    const center = radiusFilter.center;
+    
+    let isDragging = false;
+    let dragStartDistance = 0;
+    let dragStartRadius = 0;
+    
+    circle.on('mousedown', function(e) {
+        const clickPoint = e.latlng;
+        const distance = calculateDistance([center[0], center[1]], [clickPoint.lat, clickPoint.lng]);
+        const currentRadius = radiusFilter.radius;
+        
+        const tolerance = 100;
+        
+        if (Math.abs(distance - currentRadius) <= tolerance) {
+            isDragging = true;
+            dragStartDistance = distance;
+            dragStartRadius = currentRadius;
+            
+            circle.getElement().classList.add('dragging');
+            document.body.style.cursor = 'ns-resize';
+            e.originalEvent.preventDefault();
+        }
+    });
+    
+    map.on('mousemove', function(e) {
+        if (isDragging && radiusFilter.circle) {
+            const mousePoint = e.latlng;
+            const distance = calculateDistance([center[0], center[1]], [mousePoint.lat, mousePoint.lng]);
+            
+            const newRadius = Math.max(100, Math.min(10000, distance));
+            radiusFilter.radius = newRadius;
+            
+            circle.setRadius(newRadius);
+            
+            const radiusSlider = document.getElementById('radius-slider');
+            const radiusValue = document.getElementById('radius-value');
+            
+            if (radiusSlider && radiusValue) {
+                radiusSlider.value = newRadius;
+                radiusValue.textContent = newRadius;
+            }
+            
+            applyRadiusFilter();
+        }
+    });
+    
+    map.on('mouseup', function() {
+        if (isDragging) {
+            isDragging = false;
+            circle.getElement().classList.remove('dragging');
+            document.body.style.cursor = '';
+            showNotification(`Yarıçap ${Math.round(radiusFilter.radius)}m olarak ayarlandı! 📏`);
+        }
+    });
+    
+    circle.on('mouseover', function() {
+        if (!isDragging) {
+            document.body.style.cursor = 'ns-resize';
+        }
+    });
+    
+    circle.on('mouseout', function() {
+        if (!isDragging) {
+            document.body.style.cursor = '';
+        }
+    });
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && isDragging) {
+            isDragging = false;
+            circle.getElement().classList.remove('dragging');
+            document.body.style.cursor = '';
+            showNotification('Yarıçap ayarı iptal edildi! ❌');
+        }
+    });
+}
+
+function setupProfileSystem() {
+    console.log('Profil sistemi başlatılıyor...');
+    
+    const profileModal = document.getElementById('profile-modal');
+    const profileClose = document.getElementById('profile-close');
+    
+    if (!profileModal) {
+        console.error('Profile modal bulunamadı!');
+        return;
+    }
+    
+    console.log('Profil elementleri bulundu');
+    
+    profileClose.addEventListener('click', closeProfileModal);
+    profileModal.addEventListener('click', function(e) {
+        if (e.target === profileModal) {
+            closeProfileModal();
+        }
+    });
+    
+    const editProfileBtn = document.getElementById('edit-profile');
+    const myStoriesBtn = document.getElementById('my-stories');
+    const settingsBtn = document.getElementById('settings');
+    const logoutBtn = document.getElementById('logout');
+    const avatarEditBtn = document.querySelector('.avatar-edit');
+    
+    if (editProfileBtn) {
+        editProfileBtn.addEventListener('click', () => {
+            console.log('Edit profile butonu tıklandı');
+            showEditProfileModal();
+        });
+    } else {
+        console.warn('Edit profile butonu bulunamadı');
+    }
+    
+    if (myStoriesBtn) {
+        myStoriesBtn.addEventListener('click', () => {
+            showMyStories();
+        });
+    }
+    
+    
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', () => {
+            showSettings();
+        });
+    }
+    
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            logout();
+        });
+    }
+    
+    if (avatarEditBtn) {
+        avatarEditBtn.addEventListener('click', () => {
+            changeAvatar();
+        });
+    }
+}
+
+function closeProfileModal() {
+    const profileModal = document.getElementById('profile-modal');
+    profileModal.classList.add('hidden');
+}
+
+function updateProfileStats() {
+    const stories = Object.values(storyMarkers).filter(marker => marker.storyData.type === 'story').length;
+    const notes = Object.values(storyMarkers).filter(marker => marker.storyData.type === 'note').length;
+    const photos = Object.values(storyMarkers).filter(marker => marker.storyData.type === 'photo').length;
+    
+    document.getElementById('profile-stories').textContent = stories;
+    document.getElementById('profile-notes').textContent = notes;
+    document.getElementById('profile-photos').textContent = photos;
+}
+
+function showEditProfileModal() {
+    const newName = prompt('Yeni isminizi girin:', document.getElementById('profile-name').textContent);
+    if (newName && newName.trim()) {
+        document.getElementById('profile-name').textContent = newName.trim();
+        showNotification('Profil güncellendi! ✨');
+    }
+}
+
+function showMyStories() {
+    const currentUser = getCurrentUser();
+    if (!currentUser) {
+        showNotification('Lütfen önce giriş yapın! 🔐');
+        return;
+    }
+    
+    const myStories = Object.values(storyMarkers).filter(marker => 
+        marker.storyData.userId === currentUser.id
+    );
+    
+    if (myStories.length === 0) {
+        showNotification('Henüz hikayeniz yok. İlk hikayenizi ekleyin! 📖');
+        return;
+    }
+    
+    showNotification(`${myStories.length} hikayeniz bulundu! 📚`);
+    
+    Object.values(storyMarkers).forEach(marker => {
+        if (myStories.includes(marker)) {
+            marker.setOpacity(1);
+            marker.openPopup();
+        } else {
+            marker.setOpacity(0.3);
+        }
+    });
+    
+    closeProfileModal();
+}
+
+function showSettings() {
+    const settings = [
+        '🌙 Karanlık mod (aktif)',
+        '🔔 Bildirimler (açık)',
+        '📍 Konum paylaşımı (açık)',
+        '🔒 Gizlilik (standart)'
+    ];
+    
+    const setting = prompt('Hangi ayarı değiştirmek istiyorsunuz?\n\n' + settings.join('\n') + '\n\nNumara girin (1-4):');
+    
+    if (setting) {
+        showNotification('Ayar güncellendi! ⚙️');
+    }
+}
+
+function logout() {
+    if (confirm('Çıkış yapmak istediğinizden emin misiniz?')) {
+        showNotification('Çıkış yapıldı! 👋');
+        closeProfileModal();
+        
+        setTimeout(() => {
+            location.reload();
+        }, 1000);
+    }
+}
+
+function changeAvatar() {
+    showNotification('Avatar değiştirme özelliği yakında eklenecek! 📷');
+}
+
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #007bff, #0056b3);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+        z-index: 3000;
+        font-size: 0.9rem;
+        font-weight: 500;
+        animation: slideInRight 0.3s ease;
+    `;
+    notification.textContent = message;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => {
+            document.body.removeChild(notification);
+        }, 300);
+    }, 3000);
+}
+
+function createWaypoint(latlng) {
+    if (waypointMarker) {
+        map.removeLayer(waypointMarker);
+    }
+    
+    waypointMarker = L.marker(latlng, {
+        icon: L.divIcon({
+            className: 'waypoint-marker',
+            html: '<div class="waypoint-icon">📍</div>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        }),
+        draggable: true
+    }).addTo(map);
+    
+    currentLocation = latlng;
+    
+    waypointMarker.on('dragend', function(event) {
+        const newLatLng = event.target.getLatLng();
+        currentLocation = newLatLng;
+        console.log('Waypoint taşındı:', newLatLng);
+    });
+    
+    waypointMarker.on('click', function(event) {
+        createStoryAtWaypoint(latlng);
+    });
+    
+    console.log('Waypoint oluşturuldu:', latlng);
+}
+
+function removeWaypoint() {
+    if (waypointMarker) {
+        map.removeLayer(waypointMarker);
+        waypointMarker = null;
+        currentLocation = null;
+        console.log('Waypoint kaldırıldı');
+    }
+}
+
+function createStoryAtWaypoint(latlng) {
+    if (!isLoggedIn()) {
+        showNotification('Paylaşım yapmak için giriş yapın! 🔐');
+        openAuthModal();
+        return;
+    }
+    
+    showStoryTypeModal(latlng);
+}
+
+function showStoryTypeModal(latlng) {
+    const modal = document.createElement('div');
+    modal.className = 'waypoint-modal';
+    modal.innerHTML = `
+        <div class="waypoint-modal-content">
+            <h3>Hikaye Türü Seçin</h3>
+            <div class="waypoint-options">
+                <button class="waypoint-btn story-btn" data-type="story">
+                    📖 Hikaye
+                </button>
+                <button class="waypoint-btn note-btn" data-type="note">
+                    📝 Not
+                </button>
+                <button class="waypoint-btn photo-btn" data-type="photo">
+                    📷 Fotoğraf
+                </button>
+            </div>
+            <button class="waypoint-close">✕</button>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    modal.querySelectorAll('.waypoint-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const type = btn.dataset.type;
+            modal.remove();
+            openModalWithType(type);
+        });
+    });
+    
+    modal.querySelector('.waypoint-close').addEventListener('click', () => {
+        modal.remove();
+    });
+    
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.remove();
+        }
+    });
+}
+
+function setupAuthSystem() {
+    console.log('Auth sistemi başlatılıyor...');
+    
+    const authBtn = document.getElementById('auth-btn');
+    const authModal = document.getElementById('auth-modal');
+    const authClose = document.getElementById('auth-close');
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const switchToRegister = document.getElementById('switch-to-register');
+    const switchToLogin = document.getElementById('switch-to-login');
+    const authTitle = document.getElementById('auth-title');
+    
+    if (!authBtn || !authModal || !authClose || !loginForm || !registerForm) {
+        console.error('Auth elementleri bulunamadı!');
+        return;
+    }
+    
+    console.log('Auth elementleri bulundu');
+    
+    authBtn.addEventListener('click', () => {
+        if (isLoggedIn()) {
+            openProfileModal();
+        } else {
+            openAuthModal();
+        }
+    });
+    
+    authClose.addEventListener('click', closeAuthModal);
+    authModal.addEventListener('click', function(e) {
+        if (e.target === authModal) {
+            closeAuthModal();
+        }
+    });
+    
+    switchToRegister.addEventListener('click', (e) => {
+        e.preventDefault();
+        showRegisterForm();
+    });
+    
+    switchToLogin.addEventListener('click', (e) => {
+        e.preventDefault();
+        showLoginForm();
+    });
+    
+    loginForm.addEventListener('submit', handleLogin);
+    registerForm.addEventListener('submit', handleRegister);
+    
+    updateAuthButton();
+}
+
+function openAuthModal() {
+    const authModal = document.getElementById('auth-modal');
+    authModal.classList.remove('hidden');
+    showLoginForm();
+}
+
+function closeAuthModal() {
+    const authModal = document.getElementById('auth-modal');
+    authModal.classList.add('hidden');
+}
+
+function showLoginForm() {
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const authTitle = document.getElementById('auth-title');
+    
+    loginForm.classList.remove('hidden');
+    registerForm.classList.add('hidden');
+    authTitle.textContent = 'Giriş Yap';
+}
+
+function showRegisterForm() {
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const authTitle = document.getElementById('auth-title');
+    
+    loginForm.classList.add('hidden');
+    registerForm.classList.remove('hidden');
+    authTitle.textContent = 'Kayıt Ol';
+}
+
+function handleLogin(e) {
+    e.preventDefault();
+    
+    const email = document.getElementById('login-email').value;
+    const password = document.getElementById('login-password').value;
+    
+    if (!email || !password) {
+        showNotification('Lütfen tüm alanları doldurun! ⚠️');
+        return;
+    }
+    
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find(u => u.email === email && u.password === password);
+    
+    if (user) {
+        localStorage.setItem('currentUser', JSON.stringify(user));
+        updateAuthButton();
+        closeAuthModal();
+        showNotification(`Hoş geldin ${user.name}! 👋`);
+        
+        document.getElementById('login-form').reset();
+    } else {
+        showNotification('E-posta veya şifre hatalı! ❌');
+    }
+}
+
+function handleRegister(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('register-name').value;
+    const email = document.getElementById('register-email').value;
+    const password = document.getElementById('register-password').value;
+    const confirmPassword = document.getElementById('register-confirm').value;
+    
+    if (!name || !email || !password || !confirmPassword) {
+        showNotification('Lütfen tüm alanları doldurun! ⚠️');
+        return;
+    }
+    
+    if (password !== confirmPassword) {
+        showNotification('Şifreler eşleşmiyor! ❌');
+        return;
+    }
+    
+    if (password.length < 6) {
+        showNotification('Şifre en az 6 karakter olmalı! ⚠️');
+        return;
+    }
+    
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    if (users.find(u => u.email === email)) {
+        showNotification('Bu e-posta zaten kayıtlı! ❌');
+        return;
+    }
+    
+    const newUser = {
+        id: Date.now(),
+        name: name,
+        email: email,
+        password: password,
+        createdAt: new Date().toISOString(),
+        stats: {
+            stories: 0,
+            notes: 0,
+            photos: 0
+        }
+    };
+    
+    users.push(newUser);
+    localStorage.setItem('users', JSON.stringify(users));
+    localStorage.setItem('currentUser', JSON.stringify(newUser));
+    
+    updateAuthButton();
+    closeAuthModal();
+    showNotification(`Hoş geldin ${name}! Hesabın oluşturuldu! 🎉`);
+    
+    document.getElementById('register-form').reset();
+}
+
+function isLoggedIn() {
+    return localStorage.getItem('currentUser') !== null;
+}
+
+function getCurrentUser() {
+    const user = localStorage.getItem('currentUser');
+    return user ? JSON.parse(user) : null;
+}
+
+function logout() {
+    localStorage.removeItem('currentUser');
+    updateAuthButton();
+    showNotification('Çıkış yapıldı! 👋');
+    closeProfileModal();
+}
+
+function updateAuthButton() {
+    const authBtn = document.getElementById('auth-btn');
+    const dmHeaderBtn = document.getElementById('dm-header-btn');
+    
+    if (isLoggedIn()) {
+        const user = getCurrentUser();
+        authBtn.textContent = user.name;
+        authBtn.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+        
+        if (dmHeaderBtn) {
+            dmHeaderBtn.style.display = 'block';
+        }
+    } else {
+        authBtn.textContent = 'Giriş Yap';
+        authBtn.style.background = '';
+        
+        if (dmHeaderBtn) {
+            dmHeaderBtn.style.display = 'none';
+        }
+    }
+}
+
+function openProfileModal() {
+    const profileModal = document.getElementById('profile-modal');
+    const user = getCurrentUser();
+    
+    if (!user) {
+        showNotification('Lütfen önce giriş yapın! 🔐');
+        return;
+    }
+    
+    document.getElementById('profile-name').textContent = user.name;
+    document.getElementById('profile-email').textContent = user.email;
+    document.getElementById('profile-stories').textContent = user.stats.stories;
+    document.getElementById('profile-notes').textContent = user.stats.notes;
+    document.getElementById('profile-photos').textContent = user.stats.photos;
+    
+    profileModal.classList.remove('hidden');
+}
+
+function updateUserStats(userId, storyType) {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const userIndex = users.findIndex(u => u.id === userId);
+    
+    if (userIndex !== -1) {
+        if (storyType === 'story') {
+            users[userIndex].stats.stories++;
+        } else if (storyType === 'note') {
+            users[userIndex].stats.notes++;
+        } else if (storyType === 'photo') {
+            users[userIndex].stats.photos++;
+        }
+        
+        localStorage.setItem('users', JSON.stringify(users));
+        
+        const currentUser = getCurrentUser();
+        if (currentUser && currentUser.id === userId) {
+            localStorage.setItem('currentUser', JSON.stringify(users[userIndex]));
+        }
+        
+        console.log('Kullanıcı istatistikleri güncellendi:', users[userIndex].stats);
+    }
+}
+
+function setupSearchSystem() {
+    console.log('Arama sistemi başlatılıyor...');
+    
+    const searchInput = document.getElementById('search-input');
+    const searchBtn = document.getElementById('search-btn');
+    const clearBtn = document.getElementById('clear-search');
+    const searchResults = document.getElementById('search-results');
+    
+    if (!searchInput || !searchBtn || !clearBtn || !searchResults) {
+        console.error('Arama elementleri bulunamadı!');
+        return;
+    }
+    
+    console.log('Arama elementleri bulundu');
+    
+    searchBtn.addEventListener('click', () => {
+        performSearch();
+    });
+    
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            performSearch();
+        }
+    });
+    
+    clearBtn.addEventListener('click', () => {
+        clearSearch();
+    });
+    
+    let searchTimeout;
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.trim();
+        
+        if (query) {
+            clearBtn.style.display = 'block';
+            
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (query.length >= 2) {
+                    performSearch();
+                }
+            }, 500);
+        } else {
+            clearBtn.style.display = 'none';
+            hideSearchResults();
+        }
+    });
+    
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.search-container')) {
+            hideSearchResults();
+        }
+    });
+}
+
+function performSearch() {
+    const searchInput = document.getElementById('search-input');
+    const searchResults = document.getElementById('search-results');
+    const query = searchInput.value.trim();
+    
+    if (!query) {
+        showNotification('Lütfen arama terimi girin! 🔍');
+        return;
+    }
+    
+    console.log('Arama yapılıyor:', query);
+    
+    showSearchLoading();
+    
+    const localResults = searchLocations(query);
+    
+    if (localResults.length > 0) {
+        displaySearchResults(localResults);
+    } else {
+        searchWithNominatim(query);
+    }
+}
+
+async function searchWithNominatim(query) {
+    const searchStatus = document.getElementById('search-status');
+    
+    try {
+        console.log('Nominatim API ile arama yapılıyor...');
+        
+        searchStatus.style.display = 'flex';
+        searchStatus.innerHTML = '<span class="status-icon">🌐</span> API\'den aranıyor...';
+        
+        const apiUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=10&countrycodes=tr&addressdetails=1`;
+        
+        const response = await fetch(apiUrl, {
+            headers: {
+                'User-Agent': 'TraceMark/1.0'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('API isteği başarısız');
+        }
+        
+        const data = await response.json();
+        console.log('API yanıtı:', data);
+        
+        searchStatus.style.display = 'none';
+        
+        if (data.length === 0) {
+            showNoResults();
+            return;
+        }
+        
+        const formattedResults = data.map(item => ({
+            title: item.display_name.split(',')[0] || item.name || 'Bilinmeyen',
+            subtitle: item.display_name.split(',').slice(1, 3).join(',').trim() || 'Türkiye',
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+            type: getLocationTypeFromNominatim(item.type, item.class),
+            keywords: [query.toLowerCase()]
+        }));
+        
+        displaySearchResults(formattedResults);
+        
+    } catch (error) {
+        console.error('API arama hatası:', error);
+        
+        searchStatus.style.display = 'none';
+        
+        showNotification('Arama sırasında hata oluştu! 🔄');
+        showNoResults();
+    }
+}
+
+function getLocationTypeFromNominatim(type, classType) {
+    const typeMap = {
+        'administrative': 'city',
+        'place': 'city',
+        'city': 'city',
+        'town': 'town',
+        'village': 'town',
+        'hamlet': 'town',
+        'suburb': 'district',
+        'neighbourhood': 'district',
+        'tourism': 'landmark',
+        'historic': 'landmark',
+        'amenity': 'landmark'
+    };
+    
+    return typeMap[classType] || typeMap[type] || 'city';
+}
+
+function showNoResults() {
+    const searchResults = document.getElementById('search-results');
+    searchResults.innerHTML = `
+        <div class="search-no-results">
+            <span>😔 Sonuç bulunamadı</span>
+            <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
+                Farklı bir arama terimi deneyin
+            </div>
+        </div>
+    `;
+    searchResults.classList.remove('hidden');
+}
+
+function searchLocations(query) {
+    const locations = [
+        { title: 'İstanbul', subtitle: 'Türkiye', lat: 41.0082, lng: 28.9784, type: 'city', keywords: ['istanbul', 'ist', 'constantinople', 'marmara'] },
+        { title: 'Ankara', subtitle: 'Türkiye', lat: 39.9334, lng: 32.8597, type: 'city', keywords: ['ankara', 'capital', 'başkent', 'iç anadolu'] },
+        { title: 'Bursa', subtitle: 'Türkiye', lat: 40.1826, lng: 29.0665, type: 'city', keywords: ['bursa', 'green', 'yeşil', 'marmara'] },
+        { title: 'Kocaeli', subtitle: 'Türkiye', lat: 40.8533, lng: 29.8815, type: 'city', keywords: ['kocaeli', 'izmit', 'marmara'] },
+        { title: 'Sakarya', subtitle: 'Türkiye', lat: 40.7889, lng: 30.4053, type: 'city', keywords: ['sakarya', 'adapazarı', 'marmara'] },
+        { title: 'Tekirdağ', subtitle: 'Türkiye', lat: 40.9833, lng: 27.5167, type: 'city', keywords: ['tekirdağ', 'marmara'] },
+        { title: 'Edirne', subtitle: 'Türkiye', lat: 41.6771, lng: 26.5557, type: 'city', keywords: ['edirne', 'marmara', 'trakya'] },
+        { title: 'Kırklareli', subtitle: 'Türkiye', lat: 41.7333, lng: 27.2167, type: 'city', keywords: ['kırklareli', 'marmara', 'trakya'] },
+        { title: 'Balıkesir', subtitle: 'Türkiye', lat: 39.6484, lng: 27.8826, type: 'city', keywords: ['balıkesir', 'marmara', 'ege'] },
+        { title: 'Çanakkale', subtitle: 'Türkiye', lat: 40.1553, lng: 26.4142, type: 'city', keywords: ['çanakkale', 'marmara', 'troy'] },
+        { title: 'Yalova', subtitle: 'Türkiye', lat: 40.6565, lng: 29.2846, type: 'city', keywords: ['yalova', 'marmara'] },
+        { title: 'Bilecik', subtitle: 'Türkiye', lat: 40.1500, lng: 29.9833, type: 'city', keywords: ['bilecik', 'marmara'] },
+        
+        { title: 'İzmir', subtitle: 'Türkiye', lat: 38.4192, lng: 27.1287, type: 'city', keywords: ['izmir', 'smyrna', 'ege'] },
+        { title: 'Manisa', subtitle: 'Türkiye', lat: 38.6191, lng: 27.4289, type: 'city', keywords: ['manisa', 'ege'] },
+        { title: 'Aydın', subtitle: 'Türkiye', lat: 37.8560, lng: 27.8416, type: 'city', keywords: ['aydın', 'ege', 'kuşadası'] },
+        { title: 'Denizli', subtitle: 'Türkiye', lat: 37.7765, lng: 29.0864, type: 'city', keywords: ['denizli', 'ege', 'pamukkale'] },
+        { title: 'Muğla', subtitle: 'Türkiye', lat: 37.2153, lng: 28.3636, type: 'city', keywords: ['muğla', 'ege', 'bodrum', 'marmaris'] },
+        { title: 'Uşak', subtitle: 'Türkiye', lat: 38.4192, lng: 29.4089, type: 'city', keywords: ['uşak', 'ege'] },
+        { title: 'Afyonkarahisar', subtitle: 'Türkiye', lat: 38.7507, lng: 30.5567, type: 'city', keywords: ['afyonkarahisar', 'afyon', 'ege'] },
+        { title: 'Kütahya', subtitle: 'Türkiye', lat: 39.4167, lng: 29.9833, type: 'city', keywords: ['kütahya', 'ege'] },
+        
+        { title: 'Antalya', subtitle: 'Türkiye', lat: 36.8969, lng: 30.7133, type: 'city', keywords: ['antalya', 'mediterranean', 'akdeniz'] },
+        { title: 'Adana', subtitle: 'Türkiye', lat: 37.0000, lng: 35.3213, type: 'city', keywords: ['adana', 'çukurova', 'akdeniz'] },
+        { title: 'Mersin', subtitle: 'Türkiye', lat: 36.8000, lng: 34.6333, type: 'city', keywords: ['mersin', 'akdeniz'] },
+        { title: 'Hatay', subtitle: 'Türkiye', lat: 36.4018, lng: 36.3498, type: 'city', keywords: ['hatay', 'antakya', 'akdeniz'] },
+        { title: 'Kahramanmaraş', subtitle: 'Türkiye', lat: 37.5858, lng: 36.9371, type: 'city', keywords: ['kahramanmaraş', 'maraş', 'akdeniz'] },
+        { title: 'Osmaniye', subtitle: 'Türkiye', lat: 37.0742, lng: 36.2478, type: 'city', keywords: ['osmaniye', 'akdeniz'] },
+        { title: 'Isparta', subtitle: 'Türkiye', lat: 37.7648, lng: 30.5566, type: 'city', keywords: ['isparta', 'akdeniz'] },
+        { title: 'Burdur', subtitle: 'Türkiye', lat: 37.7206, lng: 30.2906, type: 'city', keywords: ['burdur', 'akdeniz'] },
+        
+        { title: 'Konya', subtitle: 'Türkiye', lat: 37.8746, lng: 32.4932, type: 'city', keywords: ['konya', 'mevlana', 'iç anadolu'] },
+        { title: 'Kayseri', subtitle: 'Türkiye', lat: 38.7312, lng: 35.4787, type: 'city', keywords: ['kayseri', 'iç anadolu'] },
+        { title: 'Sivas', subtitle: 'Türkiye', lat: 39.7477, lng: 37.0179, type: 'city', keywords: ['sivas', 'iç anadolu'] },
+        { title: 'Yozgat', subtitle: 'Türkiye', lat: 39.8181, lng: 34.8147, type: 'city', keywords: ['yozgat', 'iç anadolu'] },
+        { title: 'Kırıkkale', subtitle: 'Türkiye', lat: 39.8468, lng: 33.4988, type: 'city', keywords: ['kırıkkale', 'iç anadolu'] },
+        { title: 'Aksaray', subtitle: 'Türkiye', lat: 38.3687, lng: 34.0370, type: 'city', keywords: ['aksaray', 'iç anadolu'] },
+        { title: 'Nevşehir', subtitle: 'Türkiye', lat: 38.6939, lng: 34.6857, type: 'city', keywords: ['nevşehir', 'kapadokya', 'iç anadolu'] },
+        { title: 'Kırşehir', subtitle: 'Türkiye', lat: 39.1425, lng: 34.1709, type: 'city', keywords: ['kırşehir', 'iç anadolu'] },
+        { title: 'Çankırı', subtitle: 'Türkiye', lat: 40.6013, lng: 33.6134, type: 'city', keywords: ['çankırı', 'iç anadolu'] },
+        { title: 'Karaman', subtitle: 'Türkiye', lat: 37.1759, lng: 33.2287, type: 'city', keywords: ['karaman', 'iç anadolu'] },
+        
+        { title: 'Samsun', subtitle: 'Türkiye', lat: 41.2928, lng: 36.3313, type: 'city', keywords: ['samsun', 'karadeniz'] },
+        { title: 'Trabzon', subtitle: 'Türkiye', lat: 41.0015, lng: 39.7178, type: 'city', keywords: ['trabzon', 'karadeniz'] },
+        { title: 'Ordu', subtitle: 'Türkiye', lat: 40.9839, lng: 37.8764, type: 'city', keywords: ['ordu', 'karadeniz'] },
+        { title: 'Giresun', subtitle: 'Türkiye', lat: 40.9128, lng: 38.3895, type: 'city', keywords: ['giresun', 'karadeniz'] },
+        { title: 'Rize', subtitle: 'Türkiye', lat: 41.0201, lng: 40.5234, type: 'city', keywords: ['rize', 'karadeniz', 'çay'] },
+        { title: 'Artvin', subtitle: 'Türkiye', lat: 41.1828, lng: 41.8183, type: 'city', keywords: ['artvin', 'karadeniz'] },
+        { title: 'Gümüşhane', subtitle: 'Türkiye', lat: 40.4603, lng: 39.5086, type: 'city', keywords: ['gümüşhane', 'karadeniz'] },
+        { title: 'Bayburt', subtitle: 'Türkiye', lat: 40.2552, lng: 40.2249, type: 'city', keywords: ['bayburt', 'karadeniz'] },
+        { title: 'Kastamonu', subtitle: 'Türkiye', lat: 41.3767, lng: 33.7767, type: 'city', keywords: ['kastamonu', 'karadeniz'] },
+        { title: 'Sinop', subtitle: 'Türkiye', lat: 42.0231, lng: 35.1531, type: 'city', keywords: ['sinop', 'karadeniz'] },
+        { title: 'Çorum', subtitle: 'Türkiye', lat: 40.5506, lng: 34.9556, type: 'city', keywords: ['çorum', 'karadeniz'] },
+        { title: 'Amasya', subtitle: 'Türkiye', lat: 40.6499, lng: 35.8353, type: 'city', keywords: ['amasya', 'karadeniz'] },
+        { title: 'Tokat', subtitle: 'Türkiye', lat: 40.3167, lng: 36.5500, type: 'city', keywords: ['tokat', 'karadeniz'] },
+        { title: 'Sivas', subtitle: 'Türkiye', lat: 39.7477, lng: 37.0179, type: 'city', keywords: ['sivas', 'karadeniz'] },
+        { title: 'Zonguldak', subtitle: 'Türkiye', lat: 41.4564, lng: 31.7987, type: 'city', keywords: ['zonguldak', 'karadeniz'] },
+        { title: 'Bartın', subtitle: 'Türkiye', lat: 41.6344, lng: 32.3375, type: 'city', keywords: ['bartın', 'karadeniz'] },
+        { title: 'Karabük', subtitle: 'Türkiye', lat: 41.2061, lng: 32.6204, type: 'city', keywords: ['karabük', 'karadeniz'] },
+        { title: 'Düzce', subtitle: 'Türkiye', lat: 40.8438, lng: 31.1565, type: 'city', keywords: ['düzce', 'karadeniz'] },
+        { title: 'Bolu', subtitle: 'Türkiye', lat: 40.7316, lng: 31.6082, type: 'city', keywords: ['bolu', 'karadeniz'] },
+        
+        { title: 'Erzurum', subtitle: 'Türkiye', lat: 39.9334, lng: 41.2767, type: 'city', keywords: ['erzurum', 'doğu anadolu'] },
+        { title: 'Erzincan', subtitle: 'Türkiye', lat: 39.7500, lng: 39.5000, type: 'city', keywords: ['erzincan', 'doğu anadolu'] },
+        { title: 'Ağrı', subtitle: 'Türkiye', lat: 39.7191, lng: 43.0503, type: 'city', keywords: ['ağrı', 'doğu anadolu', 'ararat'] },
+        { title: 'Kars', subtitle: 'Türkiye', lat: 40.6013, lng: 43.0975, type: 'city', keywords: ['kars', 'doğu anadolu'] },
+        { title: 'Iğdır', subtitle: 'Türkiye', lat: 39.9167, lng: 44.0047, type: 'city', keywords: ['ığdır', 'doğu anadolu'] },
+        { title: 'Ardahan', subtitle: 'Türkiye', lat: 41.1105, lng: 42.7022, type: 'city', keywords: ['ardahan', 'doğu anadolu'] },
+        { title: 'Malatya', subtitle: 'Türkiye', lat: 38.3552, lng: 38.3095, type: 'city', keywords: ['malatya', 'doğu anadolu', 'kayısı'] },
+        { title: 'Elazığ', subtitle: 'Türkiye', lat: 38.6810, lng: 39.2264, type: 'city', keywords: ['elazığ', 'doğu anadolu'] },
+        { title: 'Bingöl', subtitle: 'Türkiye', lat: 38.8847, lng: 40.4981, type: 'city', keywords: ['bingöl', 'doğu anadolu'] },
+        { title: 'Tunceli', subtitle: 'Türkiye', lat: 39.1079, lng: 39.5401, type: 'city', keywords: ['tunceli', 'doğu anadolu'] },
+        { title: 'Muş', subtitle: 'Türkiye', lat: 38.9462, lng: 41.7539, type: 'city', keywords: ['muş', 'doğu anadolu'] },
+        { title: 'Bitlis', subtitle: 'Türkiye', lat: 38.4000, lng: 42.1167, type: 'city', keywords: ['bitlis', 'doğu anadolu'] },
+        { title: 'Van', subtitle: 'Türkiye', lat: 38.4891, lng: 43.4089, type: 'city', keywords: ['van', 'doğu anadolu', 'göl'] },
+        { title: 'Hakkari', subtitle: 'Türkiye', lat: 37.5833, lng: 43.7333, type: 'city', keywords: ['hakkari', 'doğu anadolu'] },
+        
+        { title: 'Gaziantep', subtitle: 'Türkiye', lat: 37.0662, lng: 37.3833, type: 'city', keywords: ['gaziantep', 'antep', 'güneydoğu anadolu'] },
+        { title: 'Şanlıurfa', subtitle: 'Türkiye', lat: 37.1591, lng: 38.7969, type: 'city', keywords: ['şanlıurfa', 'urfa', 'göbeklitepe', 'güneydoğu anadolu'] },
+        { title: 'Diyarbakır', subtitle: 'Türkiye', lat: 37.9144, lng: 40.2306, type: 'city', keywords: ['diyarbakır', 'amid', 'güneydoğu anadolu'] },
+        { title: 'Mardin', subtitle: 'Türkiye', lat: 37.3212, lng: 40.7245, type: 'city', keywords: ['mardin', 'güneydoğu anadolu'] },
+        { title: 'Batman', subtitle: 'Türkiye', lat: 37.8812, lng: 41.1351, type: 'city', keywords: ['batman', 'güneydoğu anadolu'] },
+        { title: 'Siirt', subtitle: 'Türkiye', lat: 37.9333, lng: 41.9500, type: 'city', keywords: ['siirt', 'güneydoğu anadolu'] },
+        { title: 'Şırnak', subtitle: 'Türkiye', lat: 37.5167, lng: 42.4500, type: 'city', keywords: ['şırnak', 'güneydoğu anadolu'] },
+        { title: 'Adıyaman', subtitle: 'Türkiye', lat: 37.7648, lng: 38.2786, type: 'city', keywords: ['adıyaman', 'güneydoğu anadolu'] },
+        { title: 'Kilis', subtitle: 'Türkiye', lat: 36.7184, lng: 37.1212, type: 'city', keywords: ['kilis', 'güneydoğu anadolu'] }
+    ];
+    
+    const normalizeText = (text) => {
+        return text
+            .toLowerCase()
+            .replace(/ğ/g, 'g')
+            .replace(/ü/g, 'u')
+            .replace(/ş/g, 's')
+            .replace(/ı/g, 'i')
+            .replace(/ö/g, 'o')
+            .replace(/ç/g, 'c');
+    };
+    
+    const normalizedQuery = normalizeText(query);
+    
+    const results = locations.filter(location => {
+        const titleMatch = normalizeText(location.title).includes(normalizedQuery);
+        const subtitleMatch = normalizeText(location.subtitle).includes(normalizedQuery);
+        const keywordMatch = location.keywords.some(keyword => 
+            normalizeText(keyword).includes(normalizedQuery)
+        );
+        
+        return titleMatch || subtitleMatch || keywordMatch;
+    });
+    
+    return results.sort((a, b) => {
+        const aScore = getMatchScore(a, normalizedQuery);
+        const bScore = getMatchScore(b, normalizedQuery);
+        return bScore - aScore;
+    });
+}
+
+function getMatchScore(location, query) {
+    let score = 0;
+    const title = normalizeText(location.title);
+    const subtitle = normalizeText(location.subtitle);
+    
+    if (title === query) score += 100;
+    if (subtitle === query) score += 80;
+    
+    if (title.startsWith(query)) score += 50;
+    if (subtitle.startsWith(query)) score += 30;
+    
+    if (title.includes(query)) score += 20;
+    if (subtitle.includes(query)) score += 10;
+    
+    const keywordMatches = location.keywords.filter(keyword => 
+        normalizeText(keyword).includes(query)
+    ).length;
+    score += keywordMatches * 15;
+    
+    return score;
+}
+
+function normalizeText(text) {
+    return text
+        .toLowerCase()
+        .replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u')
+        .replace(/ş/g, 's')
+        .replace(/ı/g, 'i')
+        .replace(/ö/g, 'o')
+        .replace(/ç/g, 'c');
+}
+
+function showSearchLoading() {
+    const searchResults = document.getElementById('search-results');
+    searchResults.innerHTML = `
+        <div class="search-loading">
+            <span>🔍 Arama yapılıyor...</span>
+        </div>
+    `;
+    searchResults.classList.remove('hidden');
+}
+
+function displaySearchResults(results) {
+    const searchResults = document.getElementById('search-results');
+    
+    if (results.length === 0) {
+        searchResults.innerHTML = `
+            <div class="search-no-results">
+                <span>😔 Sonuç bulunamadı</span>
+            </div>
+        `;
+    } else {
+        searchResults.innerHTML = results.map(result => `
+            <div class="search-result-item" data-lat="${result.lat}" data-lng="${result.lng}">
+                <span class="search-result-icon">${getLocationIcon(result.type)}</span>
+                <div class="search-result-text">
+                    <div class="search-result-title">${result.title}</div>
+                    <div class="search-result-subtitle">${result.subtitle}</div>
+                    <div class="search-result-type">${getLocationTypeText(result.type)}</div>
+                </div>
+            </div>
+        `).join('');
+        
+        searchResults.querySelectorAll('.search-result-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const lat = parseFloat(item.dataset.lat);
+                const lng = parseFloat(item.dataset.lng);
+                goToLocation(lat, lng);
+                hideSearchResults();
+            });
+        });
+    }
+    
+    searchResults.classList.remove('hidden');
+}
+
+function getLocationIcon(type) {
+    const icons = {
+        'city': '🏙️',
+        'town': '🏘️',
+        'region': '🏔️',
+        'landmark': '🏛️',
+        'district': '🏘️'
+    };
+    return icons[type] || '📍';
+}
+
+function getLocationTypeText(type) {
+    const types = {
+        'city': 'Şehir',
+        'town': 'Kasaba',
+        'region': 'Bölge',
+        'landmark': 'Tarihi Yer',
+        'district': 'Semt'
+    };
+    return types[type] || 'Konum';
+}
+
+function goToLocation(lat, lng) {
+    console.log('Konuma gidiliyor:', lat, lng);
+    
+    map.setView([lat, lng], 12);
+    
+    const tempMarker = L.marker([lat, lng], {
+        icon: L.divIcon({
+            className: 'temp-marker',
+            html: '<div style="background: #007bff; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        })
+    }).addTo(map);
+    
+    setTimeout(() => {
+        map.removeLayer(tempMarker);
+    }, 3000);
+    
+    showNotification('Konuma gidildi! 📍');
+}
+
+function clearSearch() {
+    const searchInput = document.getElementById('search-input');
+    const clearBtn = document.getElementById('clear-search');
+    const searchResults = document.getElementById('search-results');
+    
+    searchInput.value = '';
+    clearBtn.style.display = 'none';
+    hideSearchResults();
+}
+
+function hideSearchResults() {
+    const searchResults = document.getElementById('search-results');
+    searchResults.classList.add('hidden');
+}
+
+function setupPhotoModal() {
+    const photoModal = document.getElementById('photo-modal');
+    const photoClose = document.getElementById('photo-close');
+    
+    photoClose.addEventListener('click', closePhotoModal);
+    photoModal.addEventListener('click', function(e) {
+        if (e.target === photoModal) {
+            closePhotoModal();
+        }
+    });
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && !photoModal.classList.contains('hidden')) {
+            closePhotoModal();
+        }
+    });
+}
+
+function openPhotoModal(photoData, storyData) {
+    const photoModal = document.getElementById('photo-modal');
+    const photoFullSize = document.getElementById('photo-full-size');
+    const photoInfo = document.querySelector('.photo-info');
+    const photoTitle = document.getElementById('photo-title');
+    const photoDescription = document.getElementById('photo-description');
+    const photoAuthor = document.getElementById('photo-author');
+    const photoDate = document.getElementById('photo-date');
+    
+    photoFullSize.src = photoData.dataUrl;
+    photoFullSize.alt = storyData.title || 'Fotoğraf';
+    photoFullSize.style.display = 'block';
+    
+    photoTitle.textContent = storyData.title || 'Başlıksız Fotoğraf';
+    photoDescription.textContent = storyData.content || 'Açıklama yok';
+    photoAuthor.textContent = `Yazar: ${storyData.author || 'Anonim'}`;
+    photoDate.textContent = `Tarih: ${new Date(storyData.timestamp).toLocaleDateString('tr-TR')}`;
+    photoInfo.style.display = 'block';
+    
+    photoModal.classList.remove('hidden');
+}
+
+function closePhotoModal() {
+    const photoModal = document.getElementById('photo-modal');
+    const photoFullSize = document.getElementById('photo-full-size');
+    const photoInfo = document.querySelector('.photo-info');
+    
+    photoFullSize.style.display = 'none';
+    photoInfo.style.display = 'none';
+    
+    photoModal.classList.add('hidden');
+}
+
+function setupDMSystem() {
+    console.log('DM sistemi başlatılıyor...');
+    
+    const dmListModal = document.getElementById('dm-list-modal');
+    const dmListClose = document.getElementById('dm-list-close');
+    const dmConversationItems = document.querySelectorAll('.dm-conversation-item');
+    
+    const dmModal = document.getElementById('dm-modal');
+    const dmBack = document.getElementById('dm-back');
+    const dmInput = document.getElementById('dm-input');
+    const dmSend = document.getElementById('dm-send');
+    const dmAttachment = document.getElementById('dm-attachment');
+    const dmEmoji = document.getElementById('dm-emoji');
+    
+    if (!dmListModal || !dmModal) {
+        console.error('DM modalları bulunamadı!');
+        return;
+    }
+    
+    console.log('DM elementleri bulundu');
+    
+    dmListClose.addEventListener('click', closeDMListModal);
+    dmListModal.addEventListener('click', function(e) {
+        if (e.target === dmListModal) {
+            closeDMListModal();
+        }
+    });
+    
+    dmBack.addEventListener('click', () => {
+        closeDMModal();
+        openDMListModal(); // Geri butonuna basınca mesaj listesine dön
+    });
+    dmModal.addEventListener('click', function(e) {
+        if (e.target === dmModal) {
+            closeDMModal();
+        }
+    });
+    
+    dmConversationItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const userName = item.querySelector('.dm-conversation-name').textContent;
+            openDMModal(userName);
+        });
+    });
+    
+    dmSend.addEventListener('click', sendMessage);
+    dmInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    });
+    
+    dmAttachment.addEventListener('click', () => {
+        showNotification('Dosya ekleme özelliği yakında eklenecek! 📎');
+    });
+    
+    dmEmoji.addEventListener('click', () => {
+        showNotification('Emoji seçici yakında eklenecek! 😊');
+    });
+    
+    const dmVideoCall = document.getElementById('dm-video-call');
+    const dmPhoneCall = document.getElementById('dm-phone-call');
+    const dmInfo = document.getElementById('dm-info');
+    
+    if (dmVideoCall) {
+        dmVideoCall.addEventListener('click', () => {
+            showNotification('Video arama özelliği yakında eklenecek! 📹');
+        });
+    }
+    
+    if (dmPhoneCall) {
+        dmPhoneCall.addEventListener('click', () => {
+            showNotification('Sesli arama özelliği yakında eklenecek! 📞');
+        });
+    }
+    
+    if (dmInfo) {
+        dmInfo.addEventListener('click', () => {
+            showNotification('Kullanıcı bilgileri yakında eklenecek! ℹ️');
+        });
+    }
+    
+    const dmHeaderBtn = document.getElementById('dm-header-btn');
+    if (dmHeaderBtn) {
+        dmHeaderBtn.addEventListener('click', () => {
+            openDMListModal();
+        });
+    }
+    
+    // DM arama
+    const dmSearchInput = document.getElementById('dm-search');
+    if (dmSearchInput) {
+        dmSearchInput.addEventListener('input', (e) => {
+            filterConversations(e.target.value);
+        });
+    }
+    
+    // Sayfa yüklendiğinde rozeti güncelle
+    updateDMHeaderBadge();
+    
+    console.log('DM sistemi hazır!');
+}
+
+function openDMListModal() {
+    const dmListModal = document.getElementById('dm-list-modal');
+    
+    // Konuşmaları yükle ve listele
+    loadConversationsToList();
+    
+    dmListModal.classList.remove('hidden');
+    
+    // Arama kutusunu temizle
+    const dmSearchInput = document.getElementById('dm-search');
+    if (dmSearchInput) {
+        dmSearchInput.value = '';
+    }
+}
+
+function loadConversationsToList() {
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    const conversationsList = document.querySelector('.dm-conversations');
+    
+    if (!conversationsList) return;
+    
+    // Mevcut dinamik konuşmaları temizle (static olanları koru)
+    const dynamicItems = conversationsList.querySelectorAll('.dm-conversation-item.dynamic');
+    dynamicItems.forEach(item => item.remove());
+    
+    // Konuşmaları zamana göre sırala
+    const sortedConversations = Object.entries(conversations).sort((a, b) => {
+        const timeA = new Date(a[1].lastMessageTime).getTime();
+        const timeB = new Date(b[1].lastMessageTime).getTime();
+        return timeB - timeA; // En yeni önce
+    });
+    
+    // Her konuşma için liste öğesi oluştur
+    sortedConversations.forEach(([name, data]) => {
+        // Eğer bu konuşma zaten listede yoksa ekle
+        const existingItem = Array.from(conversationsList.querySelectorAll('.dm-conversation-item')).find(item => {
+            const nameEl = item.querySelector('.dm-conversation-name');
+            return nameEl && nameEl.textContent === name;
+        });
+        
+        if (existingItem) {
+            // Mevcut öğeyi güncelle
+            const previewEl = existingItem.querySelector('.dm-conversation-preview');
+            const timeEl = existingItem.querySelector('.dm-conversation-time');
+            
+            if (previewEl) {
+                previewEl.textContent = data.lastMessage.substring(0, 30) + (data.lastMessage.length > 30 ? '...' : '');
+            }
+            
+            if (timeEl) {
+                const msgDate = new Date(data.lastMessageTime);
+                const now = new Date();
+                const diffMs = now - msgDate;
+                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                
+                let timeText;
+                if (diffDays === 0) {
+                    timeText = msgDate.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+                } else if (diffDays === 1) {
+                    timeText = 'Dün';
+                } else if (diffDays < 7) {
+                    timeText = `${diffDays} gün önce`;
+                } else {
+                    timeText = msgDate.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+                }
+                
+                timeEl.textContent = timeText;
+            }
+            
+            // Okunmamış sayısını güncelle
+            const metaDiv = existingItem.querySelector('.dm-conversation-meta');
+            let unreadBadge = metaDiv.querySelector('.dm-unread-count');
+            
+            if (data.unreadCount > 0) {
+                if (!unreadBadge) {
+                    unreadBadge = document.createElement('div');
+                    unreadBadge.className = 'dm-unread-count';
+                    metaDiv.appendChild(unreadBadge);
+                }
+                unreadBadge.textContent = data.unreadCount;
+            } else {
+                if (unreadBadge) {
+                    unreadBadge.remove();
+                }
+            }
+        }
+    });
+    
+    // Header rozetini güncelle
+    updateDMHeaderBadge();
+}
+
+function closeDMListModal() {
+    const dmListModal = document.getElementById('dm-list-modal');
+    dmListModal.classList.add('hidden');
+}
+
+function openDMModal(userName) {
+    const dmModal = document.getElementById('dm-modal');
+    const dmUsername = document.querySelector('.dm-username');
+    const conversation = document.getElementById('dm-conversation');
+    
+    dmUsername.textContent = userName;
+    
+    // Konuşma alanını temizle
+    conversation.innerHTML = '';
+    
+    // Geçmiş mesajları yükle
+    const messages = loadMessages(userName);
+    
+    if (messages.length === 0) {
+        // Eğer daha önce mesaj yoksa, karşılama mesajı göster
+        const welcomeMessage = document.createElement('div');
+        welcomeMessage.className = 'dm-welcome-message';
+        welcomeMessage.innerHTML = `
+            <div style="text-align: center; padding: 40px 20px; color: #888;">
+                <div style="font-size: 2rem; margin-bottom: 10px;">💬</div>
+                <div style="font-size: 1.1rem; margin-bottom: 8px;">Konuşma başlatın!</div>
+                <div style="font-size: 0.9rem;">${userName} ile ilk mesajınızı gönderin</div>
+            </div>
+        `;
+        conversation.appendChild(welcomeMessage);
+    } else {
+        // Geçmiş mesajları göster
+        messages.forEach(msg => {
+            addMessageToConversation(msg.text, msg.type, msg.timestamp);
+        });
+    }
+    
+    // Okunmamış sayısını sıfırla
+    clearUnreadCount(userName);
+    
+    dmModal.classList.remove('hidden');
+    closeDMListModal();
+    
+    // Scroll'u en alta kaydır
+    setTimeout(() => {
+        conversation.scrollTop = conversation.scrollHeight;
+        document.getElementById('dm-input').focus();
+    }, 100);
+}
+
+function closeDMModal() {
+    const dmModal = document.getElementById('dm-modal');
+    dmModal.classList.add('hidden');
+}
+
+function sendMessage() {
+    const dmInput = document.getElementById('dm-input');
+    const message = dmInput.value.trim();
+    
+    if (!message) {
+        return;
+    }
+    
+    const currentUser = getCurrentUser();
+    if (!currentUser) {
+        showNotification('Mesaj göndermek için giriş yapın! 🔐');
+        return;
+    }
+    
+    // Aktif konuşmayı al
+    const activeConversationName = document.querySelector('.dm-username').textContent;
+    
+    addMessageToConversation(message, 'sent');
+    
+    // Mesajı localStorage'a kaydet
+    saveMessage(activeConversationName, {
+        text: message,
+        type: 'sent',
+        timestamp: new Date().toISOString()
+    });
+    
+    // Konuşma listesini güncelle
+    updateConversationList(activeConversationName, message);
+    
+    dmInput.value = '';
+    
+    // Otomatik yanıt simülasyonu
+    setTimeout(() => {
+        const autoReplies = [
+            'Teşekkürler! 😊',
+            'Anladım! 👍',
+            'Harika! 🚀',
+            'Çok güzel! ✨',
+            'Tamam! 👌',
+            'Süper! 🎉',
+            'Çok iyi! 💯',
+            'Mükemmel! ⭐'
+        ];
+        const randomReply = autoReplies[Math.floor(Math.random() * autoReplies.length)];
+        addMessageToConversation(randomReply, 'received');
+        
+        // Otomatik yanıtı da kaydet
+        saveMessage(activeConversationName, {
+            text: randomReply,
+            type: 'received',
+            timestamp: new Date().toISOString()
+        });
+        
+        // Okunmamış mesaj sayısını artır (eğer modal kapalıysa)
+        const dmModal = document.getElementById('dm-modal');
+        if (dmModal.classList.contains('hidden')) {
+            incrementUnreadCount(activeConversationName);
+        }
+    }, 1000 + Math.random() * 2000); // 1-3 saniye arası
+}
+
+function addMessageToConversation(message, type, timestamp) {
+    const conversation = document.getElementById('dm-conversation');
+    
+    // Karşılama mesajı varsa kaldır
+    const welcomeMessage = conversation.querySelector('.dm-welcome-message');
+    if (welcomeMessage) {
+        welcomeMessage.remove();
+    }
+    
+    // Zaman damgası varsa kullan, yoksa şu anki zamanı al
+    let displayTime;
+    if (timestamp) {
+        const msgDate = new Date(timestamp);
+        displayTime = msgDate.toLocaleTimeString('tr-TR', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    } else {
+        displayTime = new Date().toLocaleTimeString('tr-TR', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    }
+    
+    const messageElement = document.createElement('div');
+    messageElement.className = `dm-message ${type}`;
+    
+    if (type === 'received') {
+        messageElement.innerHTML = `
+            <div class="dm-message-avatar">
+                <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9IiMzMzMiLz4KPHN2ZyB4PSI4IiB5PSI4IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI+CjxwYXRoIGQ9Ik0xMiAxMkMxNC4yMSAxMiAxNiAxMC4yMSAxNiA4QzE2IDUuNzkgMTQuMjEgNCAxMiA0QzkuNzkgNCA4IDUuNzkgOCA4QzggMTAuMjEgOS43OSAxMiAxMiAxMlpNMTIgMTRNOS4zMyAxNCA3IDE2LjMzIDcgMTlIMTdDMTcgMTYuMzMgMTQuNjcgMTQgMTIgMTRaIi8+Cjwvc3ZnPgo=" alt="Avatar">
+            </div>
+            <div class="dm-message-content">
+                <div class="dm-message-bubble">
+                    <p>${message}</p>
+                    <span class="dm-message-time">${displayTime}</span>
+                </div>
+            </div>
+        `;
+    } else {
+        messageElement.innerHTML = `
+            <div class="dm-message-content">
+                <div class="dm-message-bubble">
+                    <p>${message}</p>
+                    <span class="dm-message-time">${displayTime}</span>
+                </div>
+            </div>
+        `;
+    }
+    
+    conversation.appendChild(messageElement);
+    
+    conversation.scrollTop = conversation.scrollHeight;
+}
+
+function setupStoryInteractions() {
+    console.log('Story interactions başlatılıyor...');
+    
+    const likeBtns = document.querySelectorAll('.like-btn');
+    likeBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            handleLike(this);
+        });
+    });
+    
+    const commentBtns = document.querySelectorAll('.comment-btn');
+    commentBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            handleComment(this);
+        });
+    });
+    
+    const shareBtns = document.querySelectorAll('.share-btn');
+    shareBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            handleShare(this);
+        });
+    });
+    
+    const saveBtns = document.querySelectorAll('.save-btn');
+    saveBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            handleSave(this);
+        });
+    });
+}
+
+function handleLike(btn) {
+    const storyId = btn.dataset.storyId;
+    const countSpan = btn.querySelector('.interaction-count');
+    let currentCount = parseInt(countSpan.textContent) || 0;
+    
+    if (btn.classList.contains('liked')) {
+        btn.classList.remove('liked');
+        currentCount--;
+        countSpan.textContent = currentCount;
+        showNotification('Beğeni kaldırıldı 💔');
+    } else {
+        btn.classList.add('liked');
+        btn.classList.add('animate');
+        currentCount++;
+        countSpan.textContent = currentCount;
+        showNotification('Beğenildi! ❤️');
+        
+        setTimeout(() => {
+            btn.classList.remove('animate');
+        }, 300);
+    }
+    
+    saveInteractionData(storyId, 'likes', currentCount);
+}
+
+function handleComment(btn) {
+    const storyId = btn.dataset.storyId;
+    const countSpan = btn.querySelector('.interaction-count');
+    let currentCount = parseInt(countSpan.textContent) || 0;
+    
+    const comment = prompt('Yorumunuzu yazın:');
+    if (comment && comment.trim()) {
+        currentCount++;
+        countSpan.textContent = currentCount;
+        btn.classList.add('active');
+        showNotification('Yorum eklendi! 💬');
+        
+        saveInteractionData(storyId, 'comments', currentCount);
+        
+        setTimeout(() => {
+            btn.classList.remove('active');
+        }, 2000);
+    }
+}
+
+function handleShare(btn) {
+    const storyId = btn.dataset.storyId;
+    
+    const shareOptions = [
+        '📱 WhatsApp',
+        '📧 E-posta',
+        '🔗 Link Kopyala',
+        '📱 SMS'
+    ];
+    
+    const choice = prompt('Paylaşım yöntemi seçin:\n\n' + 
+        shareOptions.map((option, index) => `${index + 1}. ${option}`).join('\n') + 
+        '\n\nNumara girin (1-4):');
+    
+    if (choice && choice >= 1 && choice <= 4) {
+        btn.classList.add('active');
+        showNotification(`${shareOptions[choice - 1]} ile paylaşıldı! 📤`);
+        
+        setTimeout(() => {
+            btn.classList.remove('active');
+        }, 2000);
+    }
+}
+
+function handleSave(btn) {
+    const storyId = btn.dataset.storyId;
+    
+    if (btn.classList.contains('saved')) {
+        btn.classList.remove('saved');
+        showNotification('Kayıtlardan kaldırıldı 📖');
+    } else {
+        btn.classList.add('saved');
+        btn.classList.add('animate');
+        showNotification('Kaydedildi! 🔖');
+        
+        setTimeout(() => {
+            btn.classList.remove('animate');
+        }, 300);
+    }
+    
+    saveInteractionData(storyId, 'saved', btn.classList.contains('saved'));
+}
+
+function saveInteractionData(storyId, type, value) {
+    const interactions = JSON.parse(localStorage.getItem('storyInteractions') || '{}');
+    
+    if (!interactions[storyId]) {
+        interactions[storyId] = {};
+    }
+    
+    interactions[storyId][type] = value;
+    localStorage.setItem('storyInteractions', JSON.stringify(interactions));
+}
+
+function loadInteractionData(storyId) {
+    const interactions = JSON.parse(localStorage.getItem('storyInteractions') || '{}');
+    return interactions[storyId] || {};
+}
+
+window.openPhotoModal = openPhotoModal;
+
+function applyMapView() {
+    const activeOption = document.querySelector('.view-option.active');
+    const selectedStyle = activeOption.dataset.style;
+    
+    setMapStyle(selectedStyle);
+    
+    const targetZoom = parseInt(document.getElementById('current-zoom').textContent);
+    map.setZoom(targetZoom);
+    
+    const showTraffic = document.getElementById('show-traffic').checked;
+    const showTransit = document.getElementById('show-transit').checked;
+    const showBike = document.getElementById('show-bike').checked;
+    
+    console.log('Map features:', { showTraffic, showTransit, showBike });
+    
+}
+
+// Mesajlaşma Yardımcı Fonksiyonları
+function saveMessage(conversationName, messageData) {
+    const currentUser = getCurrentUser();
+    if (!currentUser) return;
+    
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    
+    if (!conversations[conversationName]) {
+        conversations[conversationName] = {
+            messages: [],
+            unreadCount: 0,
+            lastMessage: '',
+            lastMessageTime: new Date().toISOString()
+        };
+    }
+    
+    conversations[conversationName].messages.push(messageData);
+    conversations[conversationName].lastMessage = messageData.text;
+    conversations[conversationName].lastMessageTime = messageData.timestamp;
+    
+    localStorage.setItem('dm_conversations', JSON.stringify(conversations));
+}
+
+function loadMessages(conversationName) {
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    
+    if (conversations[conversationName]) {
+        return conversations[conversationName].messages || [];
+    }
+    
+    return [];
+}
+
+function updateConversationList(conversationName, lastMessage) {
+    const conversationItems = document.querySelectorAll('.dm-conversation-item');
+    let found = false;
+    
+    conversationItems.forEach(item => {
+        const nameEl = item.querySelector('.dm-conversation-name');
+        if (nameEl && nameEl.textContent === conversationName) {
+            found = true;
+            const previewEl = item.querySelector('.dm-conversation-preview');
+            const timeEl = item.querySelector('.dm-conversation-time');
+            
+            if (previewEl) {
+                previewEl.textContent = lastMessage.substring(0, 30) + (lastMessage.length > 30 ? '...' : '');
+            }
+            
+            if (timeEl) {
+                const now = new Date();
+                const time = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+                timeEl.textContent = time;
+            }
+            
+            // Konuşmayı listenin en üstüne taşı
+            const parent = item.parentNode;
+            parent.insertBefore(item, parent.firstChild);
+        }
+    });
+    
+    // Eğer konuşma listede yoksa, yeni bir konuşma öğesi oluştur
+    if (!found) {
+        addNewConversation(conversationName, lastMessage);
+    }
+}
+
+function addNewConversation(name, lastMessage) {
+    const conversationsList = document.querySelector('.dm-conversations');
+    if (!conversationsList) return;
+    
+    const now = new Date();
+    const time = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    
+    const conversationHTML = `
+        <div class="dm-conversation-item">
+            <div class="dm-conversation-avatar">
+                <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiMzMzMiLz4KPHN2ZyB4PSIxMCIgeT0iMTAiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjZmZmIj4KPHBhdGggZD0iTTEyIDEyQzE0LjIxIDEyIDE2IDEwLjIxIDE2IDhDMTYgNS43OSAxNC4yMSA0IDEyIDRDOS43OSA0IDggNS43OSA4IDhDOCAxMC4yMSA5Ljc5IDEyIDEyIDEyWk0xMiAxNEM5LjMzIDE0IDcgMTYuMzMgNyAxOUgxN0MxNyAxNi4zMyAxNC42NyAxNCAxMiAxNFoiLz4KPC9zdmc+Cjwvc3ZnPgo=" alt="Avatar">
+            </div>
+            <div class="dm-conversation-info">
+                <div class="dm-conversation-name">${name}</div>
+                <div class="dm-conversation-preview">${lastMessage.substring(0, 30) + (lastMessage.length > 30 ? '...' : '')}</div>
+            </div>
+            <div class="dm-conversation-meta">
+                <div class="dm-conversation-time">${time}</div>
+            </div>
+        </div>
+    `;
+    
+    conversationsList.insertAdjacentHTML('afterbegin', conversationHTML);
+    
+    // Yeni eklenen öğeye tıklama olayı ekle
+    const newItem = conversationsList.firstElementChild;
+    newItem.addEventListener('click', () => {
+        openDMModal(name);
+    });
+}
+
+function incrementUnreadCount(conversationName) {
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    
+    if (conversations[conversationName]) {
+        conversations[conversationName].unreadCount = (conversations[conversationName].unreadCount || 0) + 1;
+        localStorage.setItem('dm_conversations', JSON.stringify(conversations));
+    }
+    
+    // UI'da okunmamış sayısını güncelle
+    const conversationItems = document.querySelectorAll('.dm-conversation-item');
+    conversationItems.forEach(item => {
+        const nameEl = item.querySelector('.dm-conversation-name');
+        if (nameEl && nameEl.textContent === conversationName) {
+            const metaDiv = item.querySelector('.dm-conversation-meta');
+            let unreadBadge = metaDiv.querySelector('.dm-unread-count');
+            
+            if (!unreadBadge) {
+                unreadBadge = document.createElement('div');
+                unreadBadge.className = 'dm-unread-count';
+                metaDiv.appendChild(unreadBadge);
+            }
+            
+            unreadBadge.textContent = conversations[conversationName].unreadCount;
+        }
+    });
+    
+    // Header butonunda toplam okunmamış mesaj sayısını göster
+    updateDMHeaderBadge();
+}
+
+function clearUnreadCount(conversationName) {
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    
+    if (conversations[conversationName]) {
+        conversations[conversationName].unreadCount = 0;
+        localStorage.setItem('dm_conversations', JSON.stringify(conversations));
+    }
+    
+    // UI'dan okunmamış rozeti kaldır
+    const conversationItems = document.querySelectorAll('.dm-conversation-item');
+    conversationItems.forEach(item => {
+        const nameEl = item.querySelector('.dm-conversation-name');
+        if (nameEl && nameEl.textContent === conversationName) {
+            const unreadBadge = item.querySelector('.dm-unread-count');
+            if (unreadBadge) {
+                unreadBadge.remove();
+            }
+        }
+    });
+    
+    updateDMHeaderBadge();
+}
+
+function updateDMHeaderBadge() {
+    const conversations = JSON.parse(localStorage.getItem('dm_conversations') || '{}');
+    let totalUnread = 0;
+    
+    Object.values(conversations).forEach(conv => {
+        totalUnread += (conv.unreadCount || 0);
+    });
+    
+    const dmHeaderBtn = document.getElementById('dm-header-btn');
+    if (!dmHeaderBtn) return;
+    
+    let badge = dmHeaderBtn.querySelector('.dm-badge');
+    
+    if (totalUnread > 0) {
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'dm-badge';
+            dmHeaderBtn.appendChild(badge);
+        }
+        badge.textContent = totalUnread > 99 ? '99+' : totalUnread;
+    } else {
+        if (badge) {
+            badge.remove();
+        }
+    }
+}
+
+function filterConversations(searchTerm) {
+    const conversationItems = document.querySelectorAll('.dm-conversation-item');
+    const normalizedSearch = searchTerm.toLowerCase().trim();
+    
+    conversationItems.forEach(item => {
+        const name = item.querySelector('.dm-conversation-name').textContent.toLowerCase();
+        const preview = item.querySelector('.dm-conversation-preview').textContent.toLowerCase();
+        
+        if (name.includes(normalizedSearch) || preview.includes(normalizedSearch)) {
+            item.style.display = 'flex';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    // Eğer hiç sonuç yoksa bilgi mesajı göster
+    const visibleItems = Array.from(conversationItems).filter(item => item.style.display !== 'none');
+    const conversationsList = document.querySelector('.dm-conversations');
+    let noResultsMsg = conversationsList.querySelector('.dm-no-results');
+    
+    if (visibleItems.length === 0 && searchTerm.trim() !== '') {
+        if (!noResultsMsg) {
+            noResultsMsg = document.createElement('div');
+            noResultsMsg.className = 'dm-no-results';
+            noResultsMsg.innerHTML = `
+                <div style="text-align: center; padding: 40px 20px; color: #888;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;">🔍</div>
+                    <div style="font-size: 1rem;">Sonuç bulunamadı</div>
+                    <div style="font-size: 0.9rem; margin-top: 8px;">Farklı bir arama terimi deneyin</div>
+                </div>
+            `;
+            conversationsList.appendChild(noResultsMsg);
+        }
+    } else {
+        if (noResultsMsg) {
+            noResultsMsg.remove();
+        }
+    }
+}
+
